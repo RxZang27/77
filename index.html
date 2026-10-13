@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TV Ads Player</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#000;color:#eee;font-family:system-ui,sans-serif;overflow:hidden;cursor:none}
+body.adm{cursor:auto}
+#stage{position:fixed;inset:0;background:#000}
+#stage>*{position:absolute;inset:0;width:100%;height:100%;border:0;object-fit:contain;background:#000}
+#hot{position:fixed;top:0;left:0;width:60px;height:60px;z-index:4}
+#panel{display:none;position:fixed;inset:0;overflow:auto;background:#14161a;padding:20px;z-index:5}
+body.adm #panel{display:block}
+.w{max-width:760px;margin:auto}
+h1{font-size:22px;margin:0 0 14px}
+.r{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;align-items:center}
+input[type=text],input[type=number]{padding:9px;border-radius:6px;border:1px solid #444;background:#222;color:#fff}
+input[type=text]{flex:1;min-width:200px}
+button{padding:9px 14px;border:0;border-radius:6px;background:#3a7afe;color:#fff;font-size:15px;cursor:pointer}
+button.g{background:#444}button.x{background:#c0392b}
+#go{background:#1faa59;font-size:18px;padding:12px 24px}
+.it{display:flex;gap:8px;align-items:center;background:#1f2228;padding:8px 10px;border-radius:6px;margin:6px 0}
+.it span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{font-size:12px;background:#333;padding:2px 6px;border-radius:4px}
+small{color:#999}
+</style></head><body>
+<div id="stage"></div><div id="hot"></div>
+<div id="panel"><div class="w">
+<h1>📺 จัดการโฆษณา</h1>
+<div class="r"><input type="text" id="url" placeholder="วางลิงก์ YouTube หรือลิงก์ไฟล์ภาพ/วิดีโอ (.jpg .png .mp4 .webm)">
+<button id="addU">เพิ่มลิงก์</button></div>
+<div class="r"><input type="file" id="files" accept="image/*,video/*" multiple></div>
+<div class="r">ภาพแสดงภาพละ <input type="number" id="sec" min="2" value="10" style="width:70px"> วินาที
+<label><input type="checkbox" id="mute"> ปิดเสียง</label></div>
+<div id="list"></div>
+<div class="r"><button id="go">▶ เริ่มเล่นเต็มจอ</button></div>
+<small>ออกจากโหมดเล่น: กดปุ่ม M / Esc หรือแตะมุมซ้ายบนของจอ · ไฟล์ที่อัปโหลดเก็บในเบราว์เซอร์เครื่องนี้</small>
+</div></div>
+<script>
+const $=s=>document.querySelector(s);
+let list=[],idx=0,timer,curUrl,playing=false;
+try{list=JSON.parse(localStorage.getItem('pl')||'[]')}catch(e){}
+const save=()=>{try{localStorage.setItem('pl',JSON.stringify(list))}catch(e){}};
+$('#sec').value=localStorage.getItem('sec')||10;
+$('#mute').checked=localStorage.getItem('mute')==='1';
+$('#sec').onchange=e=>localStorage.setItem('sec',e.target.value);
+$('#mute').onchange=e=>localStorage.setItem('mute',e.target.checked?'1':'0');
+
+/* IndexedDB เก็บไฟล์ */
+const idb=()=>new Promise((ok,no)=>{const r=indexedDB.open('signage',1);r.onupgradeneeded=()=>r.result.createObjectStore('f');r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)});
+const fput=async(k,v)=>{const d=await idb();return new Promise(ok=>{const t=d.transaction('f','readwrite');t.objectStore('f').put(v,k);t.oncomplete=ok})};
+const fget=async k=>{const d=await idb();return new Promise(ok=>{const q=d.transaction('f').objectStore('f').get(k);q.onsuccess=()=>ok(q.result);q.onerror=()=>ok()})};
+const fdel=async k=>{const d=await idb();d.transaction('f','readwrite').objectStore('f').delete(k)};
+
+/* แผงจัดการ */
+function render(){
+  const L=$('#list');L.innerHTML='';
+  if(!list.length)L.innerHTML='<small>ยังไม่มีรายการ เพิ่มลิงก์หรืออัปโหลดไฟล์ด้านบน</small>';
+  list.forEach((it,i)=>{
+    const d=document.createElement('div');d.className='it';
+    d.innerHTML=`<b>${i+1}</b><span class="tag">${{image:'ภาพ',video:'วิดีโอ',yt:'YouTube'}[it.type]}</span><span></span>`;
+    d.children[2].textContent=it.name;
+    [['↑',()=>mv(i,-1),'g'],['↓',()=>mv(i,1),'g'],['ลบ',()=>del(i),'x']].forEach(([t,f,c])=>{
+      const b=document.createElement('button');b.textContent=t;b.className=c;b.onclick=f;d.append(b)});
+    L.append(d)});
+}
+function mv(i,n){const j=i+n;if(j<0||j>=list.length)return;[list[i],list[j]]=[list[j],list[i]];save();render()}
+function del(i){const it=list.splice(i,1)[0];if(it.fid)fdel(it.fid);save();render()}
+$('#addU').onclick=()=>{
+  const u=$('#url').value.trim();if(!u)return;
+  const m=u.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/);
+  if(m)list.push({type:'yt',vid:m[1],name:u});
+  else if(/\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(u))list.push({type:'image',src:u,name:u});
+  else if(/\.(mp4|webm|ogv|mov)(\?|$)/i.test(u))list.push({type:'video',src:u,name:u});
+  else return alert('ไม่รู้จักชนิดลิงก์ — ใช้ลิงก์ YouTube หรือลิงก์ตรงที่ลงท้าย .jpg .png .mp4 .webm');
+  $('#url').value='';save();render()};
+$('#files').onchange=async e=>{
+  for(const f of e.target.files){
+    const type=f.type.startsWith('image/')?'image':f.type.startsWith('video/')?'video':null;if(!type)continue;
+    const fid=Date.now()+'-'+Math.random().toString(36).slice(2);
+    await fput(fid,f);list.push({type,fid,name:f.name})}
+  e.target.value='';save();render()};
+
+/* เครื่องเล่น */
+function clear(){clearTimeout(timer);$('#stage').innerHTML='';if(curUrl){URL.revokeObjectURL(curUrl);curUrl=null}}
+function next(){if(!playing)return;idx=(idx+1)%list.length;show()}
+function ytReady(){return window.YT&&YT.Player?Promise.resolve():new Promise(ok=>{
+  const s=document.createElement('script');s.src='https://www.youtube.com/iframe_api';document.head.append(s);
+  window.onYouTubeIframeAPIReady=ok})}
+async function show(){
+  clear();if(!playing||!list.length)return;
+  const it=list[idx],st=$('#stage'),muted=$('#mute').checked;let src=it.src;
+  if(it.fid){const b=await fget(it.fid);if(!b){timer=setTimeout(next,1000);return}src=curUrl=URL.createObjectURL(b)}
+  if(it.type==='image'){
+    const e=new Image();e.src=src;e.onerror=next;st.append(e);
+    timer=setTimeout(next,Math.max(2,+$('#sec').value||10)*1000);
+  }else if(it.type==='video'){
+    const v=document.createElement('video');v.src=src;v.autoplay=true;v.muted=muted;v.playsInline=true;
+    v.onended=next;v.onerror=()=>timer=setTimeout(next,2000);st.append(v);
+    v.play().catch(()=>{v.muted=true;v.play().catch(()=>{})});
+  }else{
+    await ytReady();const d=document.createElement('div');st.append(d);
+    new YT.Player(d,{videoId:it.vid,playerVars:{autoplay:1,controls:0,rel:0,modestbranding:1,playsinline:1,enablejsapi:1,...(location.protocol.startsWith('http')?{origin:location.origin,widget_referrer:location.href}:{})},
+      events:{onReady:e=>{muted?e.target.mute():e.target.unMute();e.target.playVideo()},
+        onStateChange:e=>{if(e.data===0)next()},
+        onError:()=>timer=setTimeout(next,2000)}});
+  }
+}
+function start(){
+  if(!list.length)return alert('กรุณาเพิ่มโฆษณาก่อน');
+  playing=true;idx=0;document.body.classList.remove('adm');
+  const r=document.documentElement.requestFullscreen;if(r)r.call(document.documentElement).catch(()=>{});
+  show()}
+function stop(){playing=false;clear();document.body.classList.add('adm');
+  if(document.fullscreenElement)document.exitFullscreen();render()}
+$('#go').onclick=start;$('#hot').onclick=stop;
+addEventListener('keydown',e=>{if(e.key==='m'||e.key==='M'||e.key==='Escape')playing?stop():0});
+document.body.classList.add('adm');render();
+if(location.search.includes('auto')&&list.length)start();
+</script></body></html>
